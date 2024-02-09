@@ -33,12 +33,11 @@ with open('data/sales_textbook.txt', 'r', encoding='utf-8') as f:
 # Using TikToken (Same as GPT3) to tokenize the source text
 encoding = tiktoken.get_encoding("cl100k_base")
 tokenized_text = encoding.encode(text)
-# vocab_size = len(set(tokenized_text))  # size of total vocabulary
-max_token_value = max(tokenized_text)+1  # the maximum value of the tokenized numbers
-tokenized_text = torch.tensor(tokenized_text, dtype=torch.long, device=device)  # 将77,919个tokens 转换到Pytorch张量中
+max_token_value = max(tokenized_text) + 1  # the maximum value of the tokenized numbers
+tokenized_text = torch.tensor(tokenized_text, dtype=torch.long, device=device)  # put tokenized text into tensor
 
 # Split train and validation
-split_idx = int(len(tokenized_text) * 0.8)
+split_idx = int(len(tokenized_text) * 0.9)
 train_data = tokenized_text[:split_idx]
 val_data = tokenized_text[split_idx:]
 
@@ -60,7 +59,7 @@ class FeedForward(nn.Module):
         return self.ffn(x)
 
 
-# Define Self Attention
+# Define Scaled Dot Product Attention
 class Attention(nn.Module):
     def __init__(self, head_size: int):
         super().__init__()
@@ -72,11 +71,12 @@ class Attention(nn.Module):
         self.key_layer = nn.Linear(in_features=self.d_model, out_features=self.head_size, bias=False)
         self.query_layer = nn.Linear(in_features=self.d_model, out_features=self.head_size, bias=False)
         self.value_layer = nn.Linear(in_features=self.d_model, out_features=self.head_size, bias=False)
-        self.register_buffer('tril', torch.tril(torch.ones((self.context_length, self.context_length))))  # Prepare for Masked attention
-        self.dropout_layer = nn.Dropout(dropout)
+        self.register_buffer('tril', torch.tril(
+            torch.ones((self.context_length, self.context_length))))  # Lower triangular mask
+        self.dropout_layer = nn.Dropout(self.dropout)
 
     def forward(self, x):
-        B, T, C = x.shape  # [1,64,128]
+        B, T, C = x.shape  # Batch size, Time steps(current context_length), Channels(dimensions)
         assert T <= self.context_length
         assert C == self.d_model
         q = self.query_layer(x)
@@ -131,8 +131,10 @@ class TransformerBlock(nn.Module):
         self.layer_norm_2 = nn.LayerNorm(normalized_shape=self.d_model)
 
     def forward(self, x):
-        x = x + self.multi_head_attention_layer(self.layer_norm_1(x)) # Residual connection
-        x = x + self.feed_forward_layer(self.layer_norm_2(x)) # Residual connection
+        # Note: The order of the operations is different from the original Transformer paper
+        # The order here is: LayerNorm -> Multi-head attention -> LayerNorm -> Feed forward
+        x = x + self.multi_head_attention_layer(self.layer_norm_1(x))  # Residual connection
+        x = x + self.feed_forward_layer(self.layer_norm_2(x))  # Residual connection
         return x
 
 
@@ -146,9 +148,10 @@ class TransformerLanguageModel(nn.Module):
         self.dropout = dropout
         self.max_token_value = max_token_value
         # Set up token embedding look-up table
-        self.token_embedding_lookup_table = nn.Embedding(num_embeddings=self.max_token_value, embedding_dim=self.d_model)
+        self.token_embedding_lookup_table = nn.Embedding(num_embeddings=self.max_token_value + 1, embedding_dim=self.d_model)
 
         # Run all the transformer blocks
+        # Different from original paper, here we add a final layer norm after all the blocks
         self.transformer_blocks = nn.Sequential(*(
                 [TransformerBlock(num_heads=self.num_heads) for _ in range(self.num_blocks)] +
                 [nn.LayerNorm(self.d_model)]
@@ -166,7 +169,8 @@ class TransformerLanguageModel(nn.Module):
         div_term = torch.exp(torch.arange(0, self.d_model, 2).float() * (-math.log(10000.0) / self.d_model))
         position_encoding_lookup_table[:, 0::2] = torch.sin(position * div_term)
         position_encoding_lookup_table[:, 1::2] = torch.cos(position * div_term)
-        position_embedding = position_encoding_lookup_table[:T, :]  # change position_encoding_lookup_table from (context_length, d_model) to (T, d_model)
+        # change position_encoding_lookup_table from (context_length, d_model) to (T, d_model)
+        position_embedding = position_encoding_lookup_table[:T, :].to(device)
         x = self.token_embedding_lookup_table(idx) + position_embedding
         x = self.transformer_blocks(x)
         # The "logits" are the output values of our model before applying softmax
@@ -208,8 +212,8 @@ model = model.to(device)
 def get_batch(split: str):
     data = train_data if split == 'train' else val_data
     idxs = torch.randint(low=0, high=len(data) - context_length, size=(batch_size,))
-    x = torch.stack([data[idx:idx + context_length] for idx in idxs])
-    y = torch.stack([data[idx + 1:idx + context_length + 1] for idx in idxs])
+    x = torch.stack([data[idx:idx + context_length] for idx in idxs]).to(device)
+    y = torch.stack([data[idx + 1:idx + context_length + 1] for idx in idxs]).to(device)
     return x, y
 
 
@@ -228,6 +232,7 @@ def estimate_loss():
     model.train()
     return out
 
+
 # Use AdamW optimizer
 optimizer = torch.optim.AdamW(params=model.parameters(), lr=learning_rate)
 tracked_losses = list()
@@ -235,7 +240,8 @@ for step in range(max_iters):
     if step % eval_iters == 0 or step == max_iters - 1:
         losses = estimate_loss()
         tracked_losses.append(losses)
-        print('Step:', step, 'Training Loss:', round(losses['train'].item(), 3), 'Validation Loss:', round(losses['valid'].item(), 3))
+        print('Step:', step, 'Training Loss:', round(losses['train'].item(), 3), 'Validation Loss:',
+              round(losses['valid'].item(), 3))
 
     xb, yb = get_batch('train')
     logits, loss = model(xb, yb)
@@ -245,7 +251,6 @@ for step in range(max_iters):
 
 # Save the model state dictionary
 torch.save(model.state_dict(), 'model-ckpt.pt')
-
 
 # Generate
 model.eval()
