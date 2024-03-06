@@ -5,8 +5,11 @@ torch_device = "cuda" if torch.cuda.is_available() else "cpu"
 
 tokenizer = AutoTokenizer.from_pretrained("gpt2")
 
-# add the EOS token as PAD token to avoid warnings
-model = AutoModelForCausalLM.from_pretrained("gpt2", pad_token_id=tokenizer.eos_token_id).to(torch_device)
+# to inference from default GPT2 model:
+# model = AutoModelForCausalLM.from_pretrained("gpt2", pad_token_id=tokenizer.eos_token_id).to(torch_device)
+
+# to inference from fine-tuned GPT2 model:
+model = AutoModelForCausalLM.from_pretrained('./output', pad_token_id=tokenizer.eos_token_id).to(torch_device)
 
 # what sample text to generate from
 model_inputs = tokenizer('I need to cancel my order please', return_tensors='pt').to(torch_device)
