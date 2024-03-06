@@ -79,6 +79,11 @@ This notebook prints out the intermediate results of each step followed by Trans
 ![](resources/QK-plot-2.png)
 
 
+# Other contents in this repo
+
+Under `/GPT2` directory, I put some sample code to show how to fine-tune a pre-trained GPT2 model, as well as inference from it.
+
+
 # If you want to dive deeper
 
 As if you're new to LLM, I recommend you to read my blog post [Transformer Architecture: LLM From Zero-to-Hero](https://medium.com/@waylandzhang/transformer-architecture-llms-zero-to-hero-98b1ee51a838) , which breaks down the concepts of a Transformer architecture.
